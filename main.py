@@ -35,20 +35,26 @@ def _excel_response(data: dict, fallback_name: str = "restored.xlsx") -> Streami
     )
 
 
-async def _get_upload_file(request: Request) -> UploadFile:
-    """Извлекает файл из form-data независимо от имени поля."""
+async def _resolve_file(request: Request, file: UploadFile | None) -> UploadFile:
+    """Возвращает файл из параметра `file` или ищет по любому полю формы (для Dify)."""
+    if file and file.filename:
+        return file
     form = await request.form()
-    file = next((v for v in form.values() if hasattr(v, "filename")), None)
-    if not file:
+    found = next((v for v in form.values() if hasattr(v, "filename") and v.filename), None)
+    if not found:
         raise HTTPException(status_code=400, detail="Файл не найден в запросе.")
-    if not file.filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+    return found
+
+
+def _check_ext(filename: str) -> None:
+    if not filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
         raise HTTPException(status_code=400, detail="Поддерживаются только .xlsx / .xlsm файлы.")
-    return file
 
 
 @app.post("/convert", summary="Конвертировать Excel → JSON (ответ в теле)")
-async def convert(request: Request):
-    file = await _get_upload_file(request)
+async def convert(request: Request, file: UploadFile | None = File(None)):
+    file = await _resolve_file(request, file)
+    _check_ext(file.filename)
     content = await file.read()
     try:
         result = excel_to_json(content)
@@ -59,8 +65,9 @@ async def convert(request: Request):
 
 
 @app.post("/convert/download", summary="Конвертировать Excel → скачать .json файл")
-async def convert_download(request: Request):
-    file = await _get_upload_file(request)
+async def convert_download(request: Request, file: UploadFile | None = File(None)):
+    file = await _resolve_file(request, file)
+    _check_ext(file.filename)
     content = await file.read()
     try:
         result = excel_to_json(content)
