@@ -2,7 +2,7 @@ import json
 import io
 from typing import Any
 from urllib.parse import quote
-from fastapi import FastAPI, File, UploadFile, HTTPException, Body
+from fastapi import FastAPI, File, UploadFile, HTTPException, Body, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from excel_parser import excel_to_json, json_to_excel
 
@@ -35,38 +35,37 @@ def _excel_response(data: dict, fallback_name: str = "restored.xlsx") -> Streami
     )
 
 
-@app.post("/convert", summary="Конвертировать Excel → JSON (ответ в теле)")
-async def convert(file: UploadFile = File(...)):
+async def _get_upload_file(request: Request) -> UploadFile:
+    """Извлекает файл из form-data независимо от имени поля."""
+    form = await request.form()
+    file = next((v for v in form.values() if hasattr(v, "filename")), None)
+    if not file:
+        raise HTTPException(status_code=400, detail="Файл не найден в запросе.")
     if not file.filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
-        raise HTTPException(
-            status_code=400,
-            detail="Поддерживаются только .xlsx / .xlsm файлы. Формат .xls не поддерживается.",
-        )
+        raise HTTPException(status_code=400, detail="Поддерживаются только .xlsx / .xlsm файлы.")
+    return file
 
+
+@app.post("/convert", summary="Конвертировать Excel → JSON (ответ в теле)")
+async def convert(request: Request):
+    file = await _get_upload_file(request)
     content = await file.read()
     try:
         result = excel_to_json(content)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка парсинга файла: {e}")
-
     result["filename_hint"] = file.filename
     return JSONResponse(content=result)
 
 
 @app.post("/convert/download", summary="Конвертировать Excel → скачать .json файл")
-async def convert_download(file: UploadFile = File(...)):
-    if not file.filename.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
-        raise HTTPException(
-            status_code=400,
-            detail="Поддерживаются только .xlsx / .xlsm файлы.",
-        )
-
+async def convert_download(request: Request):
+    file = await _get_upload_file(request)
     content = await file.read()
     try:
         result = excel_to_json(content)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка парсинга файла: {e}")
-
     result["filename_hint"] = file.filename
     json_bytes = json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
     output_name = file.filename.rsplit(".", 1)[0] + ".json"
